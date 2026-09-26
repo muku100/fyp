@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bengaluru House Price AI</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --line:#334155; --txt:#e2e8f0; --mut:#94a3b8; --acc:#22c55e; --err:#ef4444; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--txt); }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 28px 16px 60px; }
+  h1 { margin: 0 0 4px; font-size: 26px; }
+  p.sub { margin: 0 0 20px; color: var(--mut); }
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+  @media (max-width:640px){ .grid{ grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  label { display:block; font-size:12px; color:var(--mut); margin:0 0 4px; }
+  input, select { width:100%; padding:10px; border-radius:8px; border:1px solid var(--line); background:#0b1220; color:var(--txt); font-size:14px; }
+  .full { grid-column: 1 / -1; }
+  .row { display:flex; gap:10px; margin-top:14px; flex-wrap:wrap; }
+  button { padding:11px 18px; border-radius:9px; border:0; font-size:15px; cursor:pointer; }
+  button.go { background:var(--acc); color:#052e16; font-weight:700; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--txt); }
+  button:disabled { opacity:.6; cursor:wait; }
+  #out { margin-top:16px; display:none; }
+  #out.show { display:block; }
+  #price { font-size:34px; font-weight:800; }
+  #err { margin-top:12px; color:var(--err); white-space:pre-wrap; }
+  .note { margin-top:14px; font-size:12px; color:var(--mut); }
+  code { background:#0b1220; padding:2px 6px; border-radius:6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Bengaluru House Price AI</h1>
+  <p class="sub">XGBoost + scikit-learn pipeline &mdash; price in <b>lakhs</b>. Leave society empty if unknown.</p>
+
+  <div class="card">
+    <div class="grid">
+      <div class="full">
+        <label>Location *</label>
+        <input id="location" list="locs" placeholder="e.g. Whitefield" value="Whitefield">
+        <datalist id="locs"></datalist>
+      </div>
+      <div>
+        <label>Area type</label>
+        <select id="area_type">
+          <option>Super built-up  Area</option>
+          <option>Built-up  Area</option>
+          <option>Plot  Area</option>
+          <option>Carpet  Area</option>
+        </select>
+      </div>
+      <div>
+        <label>Availability</label>
+        <input id="availability" value="Ready To Move">
+      </div>
+      <div>
+        <label>Society (optional)</label>
+        <input id="society" placeholder="Unknown if empty" value="DuenaTa">
+      </div>
+      <div>
+        <label>Total sqft * (100–20000)</label>
+        <input id="total_sqft" type="number" value="1170" min="100" max="20000">
+      </div>
+      <div>
+        <label>BHK * (1–15)</label>
+        <input id="bhk" type="number" value="2" min="1" max="15">
+      </div>
+      <div>
+        <label>Bath (0–15)</label>
+        <input id="bath" type="number" value="2" min="0" max="15">
+      </div>
+      <div>
+        <label>Balcony (0–10)</label>
+        <input id="balcony" type="number" value="1" min="0" max="10">
+      </div>
+    </div>
+    <div class="row">
+      <button class="go" id="go" onclick="go()">Predict price</button>
+      <button class="ghost" onclick="fillEx()">Fill Whitefield example</button>
+    </div>
+    <div id="err"></div>
+  </div>
+
+  <div class="card" id="out">
+    <label>Estimated price</label>
+    <div id="price">–</div>
+    <div id="inr" class="note"></div>
+  </div>
+
+  <p class="note">API: <code>POST /predict</code> · health: <code>GET /health</code> · docs: <code>/docs</code> · Unknown location/society won't crash (rare-grouped).</p>
+</div>
+
+<script>
+async function loadLocs(){
+  try {
+    const r = await fetch('/locations');
+    const j = await r.json();
+    const dl = document.getElementById('locs');
+    dl.innerHTML = (j.locations||[]).map(l => `<option value="${l.replace(/"/g,'&quot;')}">`).join('');
+  } catch(e) { /* datalist is optional */ }
+}
+function fillEx(){
+  document.getElementById('location').value='Whitefield';
+  document.getElementById('society').value='DuenaTa';
+  document.getElementById('total_sqft').value=1170;
+  document.getElementById('bhk').value=2;
+  document.getElementById('bath').value=2;
+  document.getElementById('balcony').value=1;
+}
+function val(id){ return document.getElementById(id).value; }
+async function go(){
+  const btn = document.getElementById('go');
+  const err = document.getElementById('err');
+  const out = document.getElementById('out');
+  err.textContent = ''; out.classList.remove('show');
+  btn.disabled = true; btn.textContent = 'Predicting…';
+  const body = {
+    location: val('location').trim(),
+    society: val('society').trim() || null,
+    area_type: val('area_type'),
+    availability: val('availability').trim() || 'Ready To Move',
+    total_sqft: parseFloat(val('total_sqft')),
+    bhk: parseInt(val('bhk'), 10),
+    bath: parseFloat(val('bath')),
+    balcony: parseFloat(val('balcony')),
+  };
+  try {
+    const r = await fetch('/predict', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json();
+    if(!r.ok){
+      err.textContent = 'Error ' + r.status + ': ' + JSON.stringify(j.detail || j, null, 2);
+    } else {
+      document.getElementById('price').textContent = '₹' + j.predicted_price_lakh.toFixed(2) + ' lakh';
+      document.getElementById('inr').textContent = '≈ ₹' + Math.round(j.predicted_price_lakh*100000).toLocaleString('en-IN');
+      out.classList.add('show');
+    }
+  } catch(e){ err.textContent = 'Could not reach server. Is uvicorn running? ' + e; }
+  btn.disabled = false; btn.textContent = 'Predict price';
+}
+loadLocs();
+</script>
+</body>
+</html>
